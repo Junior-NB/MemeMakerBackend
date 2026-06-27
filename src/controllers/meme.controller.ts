@@ -215,7 +215,7 @@ export const generateMemeImage = async (req: Request, res: Response) => {
 
     try {
       // 2. Repli de secours : Pollinations.ai (100% gratuit, sans clé API, rapide)
-      const pollinationPrompt = `${prompt}. ${top_text ? `text: "${top_text}"` : ''} ${bottom_text ? `text: "${bottom_text}"` : ''}, funny internet meme, clean high quality cartoon drawing style`;
+      const pollinationPrompt = `${prompt}, high quality realistic meme template, stock photo style, clean composition`;
       const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(pollinationPrompt)}?width=512&height=512&nologo=true`;
       
       const response = await fetch(url);
