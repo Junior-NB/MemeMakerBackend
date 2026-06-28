@@ -3,7 +3,7 @@
 Ce dépôt héberge l'API Backend pour le projet **MemeMaker** (Application Mobile React Native de génération de mèmes par IA).
 L'API a pour rôle de communiquer de façon sécurisée avec l'API **Google Gemini (Flash)** pour l'analyse de textes/audios/images, et **Pollinations.ai** pour la génération d'images.
 
-##  Fonctionnalités Principales
+## 🚀 Fonctionnalités Principales
 
 - **Context Reader (Texte)** : Analyse un texte brut pour en extraire l'humour, le sarcasme ou l'absurdité, et génère un texte de mème adapté.
 - **Voice-to-Meme (Audio)** : Reçoit un fichier audio, le transmet à Gemini pour transcription et analyse d'émotion, puis suggère un mème !
@@ -13,7 +13,7 @@ L'API a pour rôle de communiquer de façon sécurisée avec l'API **Google Gemi
 
 ---
 
-##  Stack Technique
+## 🛠️ Stack Technique
 
 - **Node.js / Express** : Serveur HTTP.
 - **TypeScript** : Pour un typage strict et une base de code robuste.
@@ -23,7 +23,7 @@ L'API a pour rôle de communiquer de façon sécurisée avec l'API **Google Gemi
 
 ---
 
-##  Prérequis et Installation
+## ⚙️ Prérequis et Installation
 
 1. **Cloner le projet**
    ```bash
@@ -73,4 +73,4 @@ Pour faire fonctionner l'Application Mobile (React Native) en environnement de d
 ```bash
 adb reverse tcp:3000 tcp:3000
 ```
-Le repo de l'application mobile est : https://github.com/Sliverotakou/MemeMaker
+Le repo de l'application mobile est normalement disponible sur votre profil GitHub.

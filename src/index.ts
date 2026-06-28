@@ -3,6 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
+import dns from 'dns';
+
+// Fix Node.js ETIMEDOUT issue on IPv6-enabled networks without active routing
+dns.setDefaultResultOrder('ipv4first');
 
 import memeRoutes from './routes/meme.routes';
 import uploadRoutes from './routes/upload.routes';

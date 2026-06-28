@@ -1,13 +1,35 @@
 import { Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { getModel, MODEL_FLASH, MODEL_IMAGE_GEN } from '../config/gemini';
+import sharp from 'sharp';
+import { getModel, MODEL_FLASH, FALLBACK_MODELS } from '../config/gemini';
 
 // ─── Helper : extraire le JSON d'une réponse Gemini ──────────────────────────
 function parseJsonResponse(text: string): any {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error('Réponse IA invalide : aucun JSON trouvé');
   return JSON.parse(match[0]);
+}
+
+// ─── Helper : exécuter avec repli automatique ───────────────────────────────
+async function executeWithFallback(promptData: any): Promise<any> {
+  const modelsToTry = [MODEL_FLASH, ...FALLBACK_MODELS];
+  let lastError = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      console.log(`[Gemini] Tentative avec le modèle : ${modelName}`);
+      const model = getModel(modelName);
+      const result = await model.generateContent(promptData);
+      return result;
+    } catch (error: any) {
+      console.warn(`[Gemini] Échec avec ${modelName}:`, error.message);
+      lastError = error;
+      // Si l'erreur n'est pas un 503 ou une surcharge, on peut éventuellement décider de ne pas réessayer.
+      // Mais dans le doute, on essaie le prochain modèle.
+    }
+  }
+  throw lastError;
 }
 
 // ─── 1. CONTEXT READER ────────────────────────────────────────────────────────
@@ -21,8 +43,6 @@ export const generateFromText = async (req: Request, res: Response) => {
   }
 
   try {
-    const model = getModel(MODEL_FLASH);
-
     let styleInstruction = "Humour general, relatable et leger.";
     switch (style.toLowerCase()) {
       case 'sarcastique':
@@ -57,7 +77,7 @@ Génère un mème adapté au contexte. Réponds UNIQUEMENT en JSON valide :
 Directives de style d'humour : ${styleInstruction}
 `;
 
-    const result = await model.generateContent(prompt);
+    const result = await executeWithFallback(prompt);
     const response = result.response;
     const responseText = response.text();
     const memeData = parseJsonResponse(responseText);
@@ -79,12 +99,10 @@ export const generateFromAudio = async (req: Request, res: Response) => {
   const audioPath = req.file.path;
 
   try {
-    const model = getModel(MODEL_FLASH);
-
     // Lire l'audio en base64
     const audioBase64 = fs.readFileSync(audioPath).toString('base64');
 
-    const result = await model.generateContent([
+    const result = await executeWithFallback([
       {
         inlineData: {
           mimeType: req.file.mimetype,
@@ -131,11 +149,9 @@ export const generateFromImage = async (req: Request, res: Response) => {
   const { context = '' } = req.body;
 
   try {
-    const model = getModel(MODEL_FLASH);
-
     const imageBase64 = fs.readFileSync(imagePath).toString('base64');
 
-    const result = await model.generateContent([
+    const result = await executeWithFallback([
       {
         inlineData: {
           mimeType: req.file.mimetype,
@@ -169,7 +185,7 @@ Réponds UNIQUEMENT en JSON valide :
   }
 };
 
-// ─── 4. GENERATE IMAGE [BONUS] ────────────────────────────────────────────────
+// ─── 4. GENERATE IMAGE [POLLINATIONS.AI] ───────────────────────────────────────
 // POST /api/meme/generate-image
 // Body: { prompt: string, top_text?: string, bottom_text?: string }
 export const generateMemeImage = async (req: Request, res: Response) => {
@@ -181,70 +197,116 @@ export const generateMemeImage = async (req: Request, res: Response) => {
 
   const uploadDir = process.env.UPLOAD_DIR || './uploads';
   const filename  = `generated-${Date.now()}.png`;
-  let imageBuffer: Buffer;
-  let description = '';
 
   try {
-    // 1. Essai de génération d'image avec le modèle multimodal Gemini
-    const model = getModel(MODEL_IMAGE_GEN);
+    const axios = require('axios');
+    const https = require('https');
+    
+    const pollinationPrompt = `${prompt}, high quality realistic meme template, stock photo style, clean composition`;
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(pollinationPrompt)}?width=512&height=512&nologo=true`;
 
-    const imagePrompt = [
-      `Create a funny meme image: ${prompt}.`,
-      top_text    ? `Top text: "${top_text}".`    : '',
-      bottom_text ? `Bottom text: "${bottom_text}".` : '',
-      'Style: internet meme, humorous, expressive.',
-    ].filter(Boolean).join(' ');
+    console.log('[generate-image] Génération via Pollinations.ai...');
 
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: imagePrompt }] }],
-      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] } as any,
+    const response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 60000,
+      maxRedirects: 5,
+      httpsAgent: new https.Agent({ family: 4 }),
     });
 
-    const parts = result.response.candidates?.[0]?.content?.parts || [];
-    const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
-    const textPart  = parts.find((p: any) => p.text);
+    const imageBuffer = Buffer.from(response.data);
 
-    if (!imagePart?.inlineData) {
-      throw new Error('Aucune image générée par le modèle.');
-    }
+    // Écriture locale du fichier image dans uploads/
+    fs.writeFileSync(`${uploadDir}/${filename}`, imageBuffer);
 
-    imageBuffer = Buffer.from(imagePart.inlineData.data as string, 'base64');
-    description = textPart?.text || '';
-  } catch (geminiErr: any) {
-    console.log('[generate-image] Gemini Image Gen a échoué (facturation/limites). Repli sur Pollinations.ai...', geminiErr.message);
+    return res.json({
+      success: true,
+      imageUrl: `/uploads/${filename}`,
+      description: 'Généré via Pollinations.ai',
+    });
+  } catch (err: any) {
+    console.error('[generate-image] Pollinations.ai a échoué:', err);
+    return res.status(500).json({
+      error: "Erreur lors de la génération d'image. Réessayez dans quelques instants.",
+      details: err.message || String(err),
+    });
+  }
+};
 
-    try {
-      // 2. Repli de secours : Pollinations.ai (100% gratuit, sans clé API, rapide)
-      const pollinationPrompt = `${prompt}, high quality realistic meme template, stock photo style, clean composition`;
-      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(pollinationPrompt)}?width=512&height=512&nologo=true`;
-      
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Pollinations.ai a retourné le statut ${response.status}`);
-      }
-      const arrayBuffer = await response.arrayBuffer();
-      imageBuffer = Buffer.from(arrayBuffer);
-      description = 'Généré via Pollinations.ai (Secours)';
-    } catch (pollinationErr: any) {
-      console.error('[generate-image] Le service de secours Pollinations.ai a également échoué:', pollinationErr.message);
-      
-      // Si les deux échouent, renvoyer l'erreur de base
-      let userFriendlyError = "Erreur lors de la génération d'image.";
-      if (geminiErr.message?.includes('paid plans') || geminiErr.message?.includes('paid plan')) {
-        userFriendlyError = "La génération d'images par l'IA (Imagen 3) nécessite un plan payant dans Google AI Studio et le service de secours libre a échoué.";
-      }
-      return res.status(400).json({ error: userFriendlyError, details: geminiErr.message });
-    }
+// ─── 4.5. APPLY FILTER [SHARP] ───────────────────────────────────────────────
+// POST /api/meme/apply-filter
+// Body: { imageUrl: string, filter: string }
+export const applyFilter = async (req: Request, res: Response) => {
+  const { imageUrl, filter } = req.body;
+
+  if (!imageUrl) {
+    return res.status(400).json({ error: 'Le champ "imageUrl" est requis.' });
   }
 
-  // Écriture locale du fichier image dans uploads/
-  fs.writeFileSync(`${uploadDir}/${filename}`, imageBuffer);
+  try {
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+    const filename = path.basename(imageUrl);
+    const inputPath = path.resolve(uploadDir, filename);
 
-  return res.json({
-    success: true,
-    imageUrl: `/uploads/${filename}`,
-    description,
-  });
+    if (!fs.existsSync(inputPath)) {
+      return res.status(404).json({ error: `Image introuvable sur le serveur : ${filename}` });
+    }
+
+    const ext = path.extname(filename);
+    const base = path.basename(filename, ext);
+    // On nettoie le nom de base s'il contenait déjà un filtre pour ne pas accumuler dans le nom
+    const cleanBase = base.split('-filter-')[0];
+    const outputFilename = `${cleanBase}-filter-${filter}-${Date.now()}${ext}`;
+    const outputPath = path.resolve(uploadDir, outputFilename);
+
+    let transformer = sharp(inputPath);
+
+    switch (filter.toLowerCase()) {
+      case 'grayscale':
+        transformer = transformer.grayscale();
+        break;
+      case 'sepia':
+        transformer = transformer.recomb([
+          [0.3588, 0.7044, 0.1368],
+          [0.2990, 0.5870, 0.1140],
+          [0.2392, 0.4696, 0.0912]
+        ]);
+        break;
+      case 'invert':
+        transformer = transformer.negate();
+        break;
+      case 'blur':
+        transformer = transformer.blur(6);
+        break;
+      case 'vibrant':
+        transformer = transformer.modulate({ saturation: 1.8, brightness: 1.1 });
+        break;
+      case 'cool':
+        transformer = transformer.recomb([
+          [0.8, 0.0, 0.0],
+          [0.0, 0.9, 0.0],
+          [0.0, 0.0, 1.3]
+        ]);
+        break;
+      case 'normal':
+      default:
+        // Si c'est normal, on retourne l'image d'origine
+        return res.json({
+          success: true,
+          imageUrl: `/uploads/${filename}`
+        });
+    }
+
+    await transformer.toFile(outputPath);
+
+    return res.json({
+      success: true,
+      imageUrl: `/uploads/${outputFilename}`
+    });
+  } catch (err: any) {
+    console.error('[applyFilter] Erreur:', err.message);
+    return res.status(500).json({ error: 'Erreur lors de l\'application du filtre.', details: err.message });
+  }
 };
 
 // ─── 5. SAVE & FEED PERSISTENCE [JSON DB] ─────────────────────────────────────
