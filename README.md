@@ -73,4 +73,3 @@ Pour faire fonctionner l'Application Mobile (React Native) en environnement de d
 ```bash
 adb reverse tcp:3000 tcp:3000
 ```
-Le repo de l'application mobile est normalement disponible sur votre profil GitHub.

@@ -8,6 +8,7 @@ import {
   saveMeme,
   getMemeFeed,
   applyFilter,
+  makeSticker,
 } from '../controllers/meme.controller';
 
 const router = Router();
@@ -26,6 +27,9 @@ router.post('/generate-image', generateMemeImage);
 
 // POST /api/meme/apply-filter    → Appliquer un filtre d'image (Noir & Blanc, Sépia...)
 router.post('/apply-filter', applyFilter);
+
+// POST /api/meme/make-sticker    → Générer un sticker transparent (.webp)
+router.post('/make-sticker', makeSticker);
 
 // POST /api/meme/save           → Sauvegarde d'un mème
 router.post('/save', saveMeme);

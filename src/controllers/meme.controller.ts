@@ -379,3 +379,121 @@ export const getMemeFeed = async (_req: Request, res: Response) => {
   }
 };
 
+// POST /api/meme/make-sticker
+export const makeSticker = async (req: Request, res: Response) => {
+  const { imageUrl } = req.body;
+  if (!imageUrl) {
+    return res.status(400).json({ success: false, error: 'imageUrl manquante' });
+  }
+
+  try {
+    const axios = require('axios');
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+
+    // 1. Récupérer le buffer de l'image
+    let inputBuffer: Buffer;
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+      inputBuffer = Buffer.from(response.data);
+    } else {
+      let cleanPath = imageUrl;
+      if (cleanPath.startsWith('/uploads')) {
+        cleanPath = path.join(uploadDir, cleanPath.replace('/uploads', ''));
+      } else if (cleanPath.startsWith('uploads')) {
+        cleanPath = path.join(uploadDir, cleanPath.replace('uploads', ''));
+      }
+      inputBuffer = fs.readFileSync(cleanPath);
+    }
+
+    // 2. Charger l'image avec sharp, assurer le canal alpha (RGBA)
+    const image = sharp(inputBuffer);
+    const { data, info } = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+
+    const width = info.width;
+    const height = info.height;
+    const visited = new Uint8Array(width * height);
+    const queue: number[] = [];
+
+    // Index dans le tableau 1D de pixels
+    const getIndex = (x: number, y: number) => y * width + x;
+
+    const enqueue = (x: number, y: number) => {
+      const idx = getIndex(x, y);
+      if (!visited[idx]) {
+        visited[idx] = 1;
+        queue.push(x, y);
+      }
+    };
+
+    // Ajouter les pixels de bordure à la file d'attente de départ
+    for (let x = 0; x < width; x++) {
+      enqueue(x, 0);
+      enqueue(x, height - 1);
+    }
+    for (let y = 0; y < height; y++) {
+      enqueue(0, y);
+      enqueue(width - 1, y);
+    }
+
+    // Lire la couleur de fond cible au coin supérieur gauche
+    const bgR = data[0];
+    const bgG = data[1];
+    const bgB = data[2];
+
+    const tolerance = 25; // Sensibilité du détourage
+
+    // Remplissage par diffusion (Flood Fill)
+    let head = 0;
+    while (head < queue.length) {
+      const x = queue[head++];
+      const y = queue[head++];
+
+      const idx = getIndex(x, y);
+      const pixelStart = idx * 4;
+      const r = data[pixelStart];
+      const g = data[pixelStart + 1];
+      const b = data[pixelStart + 2];
+
+      // Vérifier si la couleur du pixel est proche de la couleur du fond
+      const diffR = Math.abs(r - bgR);
+      const diffG = Math.abs(g - bgG);
+      const diffB = Math.abs(b - bgB);
+
+      if (diffR <= tolerance && diffG <= tolerance && diffB <= tolerance) {
+        data[pixelStart + 3] = 0; // Rendre transparent
+
+        // Propager aux 4 voisins
+        if (x > 0) enqueue(x - 1, y);
+        if (x < width - 1) enqueue(x + 1, y);
+        if (y > 0) enqueue(x, y - 1);
+        if (y < height - 1) enqueue(x, y + 1);
+      }
+    }
+
+    // 3. Exporter l'image détourée sous forme de fichier WebP (.webp)
+    const filename = `sticker-${Date.now()}.webp`;
+    const outputPath = path.join(uploadDir, filename);
+
+    await sharp(data, {
+      raw: {
+        width,
+        height,
+        channels: 4,
+      },
+    })
+      .webp({ quality: 90 })
+      .toFile(outputPath);
+
+    return res.json({
+      success: true,
+      stickerUrl: `/uploads/${filename}`,
+    });
+  } catch (err: any) {
+    console.error('[makeSticker] Erreur:', err);
+    return res.status(500).json({
+      error: 'Erreur lors de la création du sticker.',
+      details: err.message || String(err),
+    });
+  }
+};
+
